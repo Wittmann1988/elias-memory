@@ -82,5 +82,8 @@ class Database:
             embedding=row[8],
         )
 
+    def _serialize_metadata(self, metadata: dict) -> str:
+        return json.dumps(metadata, ensure_ascii=False)
+
     def close(self) -> None:
         self._conn.close()

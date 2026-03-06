@@ -28,7 +28,7 @@ class NumpyVectorIndex(VectorIndex):
         norm = np.linalg.norm(query_vec)
         q = query_vec / norm if norm > 0 else query_vec
         matrix = np.stack(self._vecs)
-        similarities = matrix @ q
+        similarities = matrix.astype(np.float32) @ q.astype(np.float32)
         top_indices = np.argsort(similarities)[::-1][:top_k]
         return [(self._ids[i], float(similarities[i])) for i in top_indices]
 

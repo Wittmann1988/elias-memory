@@ -1,32 +1,81 @@
-"""Memory facade — high-level API combining all components."""
+"""Memory facade — high-level API combining all components.
+
+v0.2.0: Desktop/Mobile profiles, consolidation, knowledge gap detection.
+"""
 from __future__ import annotations
 
 from typing import Any
 
+from elias_memory.consolidation import (
+    consolidate_cluster,
+    create_semantic_from_cluster,
+    find_clusters,
+)
 from elias_memory.decay import ExponentialDecay
+from elias_memory.embeddings.base import Embedder
 from elias_memory.embeddings.fallback import HashEmbedder
 from elias_memory.export import export_sft
+from elias_memory.gaps import KnowledgeGap, detect_gaps, detect_retrieval_gaps
 from elias_memory.retrieval import VectorRetriever
 from elias_memory.store.db import Database
-from elias_memory.store.vec import NumpyVectorIndex
+from elias_memory.store.vec import NumpyVectorIndex, VectorIndex
 from elias_memory.types import MemoryRecord
 
 
+def _make_embedder(profile: str, dim: int) -> Embedder:
+    """Create the best available embedder for the given profile."""
+    if profile == "desktop":
+        try:
+            from elias_memory.embeddings.nvidia import NvidiaEmbedder
+            return NvidiaEmbedder()
+        except Exception:
+            pass
+    return HashEmbedder(dim=dim)
+
+
+def _make_vec_index(profile: str, dim: int) -> VectorIndex:
+    """Create the best available vector index for the given profile."""
+    if profile == "desktop":
+        try:
+            import faiss  # noqa: F401
+            from elias_memory.store.faiss_index import FaissIndex
+            return FaissIndex(dim=dim)
+        except ImportError:
+            pass
+    return NumpyVectorIndex(dim=dim)
+
+
 class Memory:
-    """High-level facade for the memory framework."""
+    """High-level facade for the memory framework.
+
+    Profiles:
+        - "desktop": NVIDIA embeddings, FAISS index, full consolidation
+        - "mobile": Hash embeddings, numpy index, basic features
+        - "auto": Detect based on available libraries
+    """
 
     def __init__(
         self,
         db_path: str,
         *,
-        embedder: object | None = None,
+        profile: str = "auto",
+        embedder: Embedder | None = None,
+        vec_index: VectorIndex | None = None,
         decay_half_life: float = 7.0,
         embedding_dim: int = 384,
     ) -> None:
+        if profile == "auto":
+            try:
+                import faiss  # noqa: F401
+                profile = "desktop"
+            except ImportError:
+                profile = "mobile"
+
+        self.profile = profile
         self._db = Database(db_path)
-        self._embedder = embedder or HashEmbedder(dim=embedding_dim)
+        self._embedder = embedder or _make_embedder(profile, embedding_dim)
         self._decay = ExponentialDecay(half_life_days=decay_half_life)
-        self._vec_index = NumpyVectorIndex(dim=embedding_dim)
+        self._vec_index = vec_index or _make_vec_index(profile, embedding_dim)
         self._retriever = VectorRetriever(
             index=self._vec_index,
             embedder=self._embedder,
@@ -71,15 +120,116 @@ class Memory:
         if rec:
             rec.access_count += 1
 
-    def decay_cycle(self) -> None:
+    def delete(self, memory_id: str) -> None:
+        """Delete a memory by ID."""
+        self._db.delete(memory_id)
+        self._vec_index.delete(memory_id)
+        self._records.pop(memory_id, None)
+
+    def decay_cycle(self) -> int:
+        """Run decay on all memories. Returns number of pruned memories."""
+        pruned = 0
+        to_delete = []
         for rec in self._records.values():
             new_importance = self._decay.compute(rec)
             if abs(new_importance - rec.importance) > 0.001:
                 self._db.update_importance(rec.id, new_importance)
                 rec.importance = new_importance
+            if new_importance <= 0.01:
+                to_delete.append(rec.id)
+        for mid in to_delete:
+            self.delete(mid)
+            pruned += 1
+        return pruned
 
-    def export_sft(self, path: str) -> None:
-        export_sft(list(self._records.values()), path)
+    # --- Consolidation ---
+
+    def consolidate(
+        self,
+        similarity_threshold: float = 0.6,
+        min_cluster_size: int = 3,
+        summarizer: Any | None = None,
+    ) -> list[str]:
+        """Consolidate episodic memories into semantic knowledge.
+
+        Returns IDs of newly created semantic memories.
+        """
+        episodes = [
+            r for r in self._records.values()
+            if r.type == "episodic" and not r.metadata.get("consolidated")
+        ]
+        if len(episodes) < min_cluster_size:
+            return []
+
+        clusters = find_clusters(
+            episodes, self._vec_index, self._embedder,
+            similarity_threshold=similarity_threshold,
+            min_cluster_size=min_cluster_size,
+        )
+
+        new_ids = []
+        for cluster in clusters:
+            if summarizer:
+                summary = summarizer(cluster)
+            else:
+                summary = consolidate_cluster(cluster)
+
+            semantic = create_semantic_from_cluster(cluster, summary)
+            vec = self._embedder.embed(semantic.content)
+            semantic.embedding = vec.tobytes()
+            self._db.insert(semantic)
+            self._vec_index.add(semantic.id, vec)
+            self._records[semantic.id] = semantic
+            new_ids.append(semantic.id)
+
+            # Mark source episodes as consolidated
+            for ep in cluster:
+                ep.metadata["consolidated"] = True
+                ep.metadata["consolidated_into"] = semantic.id
+                self._db.execute(
+                    "UPDATE memories SET metadata = ? WHERE id = ?",
+                    (self._db._serialize_metadata(ep.metadata), ep.id),
+                )
+
+        return new_ids
+
+    # --- Knowledge Gap Detection ---
+
+    def knowledge_gaps(self, min_coverage: float = 0.3) -> list[KnowledgeGap]:
+        """Detect topics with low coverage."""
+        return detect_gaps(self._records, min_coverage_threshold=min_coverage)
+
+    def has_gap(self, query: str, threshold: float = 0.3) -> bool:
+        """Check if a query hits a knowledge gap (low similarity)."""
+        query_vec = self._embedder.embed(query)
+        results = self._vec_index.search(query_vec, top_k=3)
+        return detect_retrieval_gaps(query, results, threshold=threshold)
+
+    # --- Export ---
+
+    def export_sft(self, path: str, *, min_importance: float = 0.0) -> None:
+        records = [
+            r for r in self._records.values()
+            if r.importance >= min_importance
+        ]
+        export_sft(records, path)
+
+    # --- Stats ---
+
+    def stats(self) -> dict[str, Any]:
+        """Return memory statistics."""
+        type_counts: dict[str, int] = {}
+        total_importance = 0.0
+        for rec in self._records.values():
+            type_counts[rec.type] = type_counts.get(rec.type, 0) + 1
+            total_importance += rec.importance
+        total = len(self._records)
+        return {
+            "total": total,
+            "by_type": type_counts,
+            "avg_importance": round(total_importance / total, 3) if total > 0 else 0,
+            "profile": self.profile,
+        }
 
     def close(self) -> None:
         self._db.close()
