@@ -15,6 +15,7 @@
 Trains Qwen2.5-3B on memory operation traces using LoRA.
 Dataset: erik1988/elias-memory-traces-v1 (24 traces)
 Output: erik1988/elias-memory-agent-v1
+Hardware: T4 (16GB) — requires batch_size=1, fp16, max_length=512
 """
 
 import os
@@ -41,20 +42,21 @@ lora_config = LoraConfig(
     task_type="CAUSAL_LM",
 )
 
-# Training config
+# Training config — optimized for T4 16GB
 training_args = SFTConfig(
     output_dir="./output",
     num_train_epochs=3,
-    per_device_train_batch_size=2,
-    gradient_accumulation_steps=8,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=16,
     learning_rate=2e-4,
     warmup_ratio=0.1,
-    logging_steps=5,
+    max_length=512,
+    logging_steps=1,
     save_strategy="epoch",
     push_to_hub=True,
     hub_model_id=OUTPUT_MODEL,
     gradient_checkpointing=True,
-    bf16=True,
+    fp16=True,
     report_to="trackio",
     project="elias-memory",
     run_name="sft-v1-qwen25-3b",
