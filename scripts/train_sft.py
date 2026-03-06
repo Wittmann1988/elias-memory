@@ -17,6 +17,9 @@ Dataset: erik1988/elias-memory-traces-v1 (24 traces)
 Output: erik1988/elias-memory-agent-v1
 """
 
+import os
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+
 from datasets import load_dataset
 from peft import LoraConfig
 from trl import SFTTrainer, SFTConfig
