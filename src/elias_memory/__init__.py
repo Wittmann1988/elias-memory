@@ -8,6 +8,7 @@ Desktop/Mobile 2-tier architecture:
 from elias_memory.core import Memory
 from elias_memory.types import MemoryRecord
 from elias_memory.gaps import KnowledgeGap
+from elias_memory.graph import KnowledgeGraph, Relation, Entity
 
-__version__ = "0.2.0"
-__all__ = ["Memory", "MemoryRecord", "KnowledgeGap"]
+__version__ = "0.3.0"
+__all__ = ["Memory", "MemoryRecord", "KnowledgeGap", "KnowledgeGraph", "Relation", "Entity"]
