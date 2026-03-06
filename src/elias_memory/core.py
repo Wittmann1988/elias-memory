@@ -17,6 +17,7 @@ from elias_memory.embeddings.fallback import HashEmbedder
 from elias_memory.export import export_sft
 from elias_memory.gaps import KnowledgeGap, detect_gaps, detect_retrieval_gaps
 from elias_memory.graph import KnowledgeGraph, Relation, Entity
+from elias_memory.guard import GoalGuard
 from elias_memory.retrieval import VectorRetriever
 from elias_memory.store.db import Database
 from elias_memory.store.vec import NumpyVectorIndex, VectorIndex
@@ -106,6 +107,7 @@ class Memory:
             decay=self._decay,
         )
         self._graph = KnowledgeGraph(self._db)
+        self._guard = GoalGuard(self._db)
         self._records: dict[str, MemoryRecord] = {}
         self._load_existing()
 
@@ -118,6 +120,10 @@ class Memory:
     @property
     def graph(self) -> KnowledgeGraph:
         return self._graph
+
+    @property
+    def guard(self) -> GoalGuard:
+        return self._guard
 
     def add(
         self,

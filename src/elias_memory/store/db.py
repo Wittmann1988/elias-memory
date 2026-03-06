@@ -21,24 +21,31 @@ class Database:
         self._init_schema()
 
     def _init_schema(self) -> None:
+        # Migrate FIRST (add columns to existing tables before creating indexes)
+        self._migrate()
         schema = _SCHEMA_PATH.read_text()
         self._conn.executescript(schema)
-        self._migrate()
 
     def _migrate(self) -> None:
         """Add columns if upgrading from v0.2.0."""
+        # Check if memories table exists at all
+        table_exists = self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='memories'"
+        ).fetchone()
+        if not table_exists:
+            return  # Fresh DB, schema.sql will create everything
+
         cursor = self._conn.execute("PRAGMA table_info(memories)")
         columns = {row[1] for row in cursor.fetchall()}
-        with self._lock:
-            if "namespace" not in columns:
-                self._conn.execute(
-                    "ALTER TABLE memories ADD COLUMN namespace TEXT NOT NULL DEFAULT 'global'"
-                )
-            if "scope" not in columns:
-                self._conn.execute(
-                    "ALTER TABLE memories ADD COLUMN scope TEXT NOT NULL DEFAULT 'shared'"
-                )
-            self._conn.commit()
+        if "namespace" not in columns:
+            self._conn.execute(
+                "ALTER TABLE memories ADD COLUMN namespace TEXT NOT NULL DEFAULT 'global'"
+            )
+        if "scope" not in columns:
+            self._conn.execute(
+                "ALTER TABLE memories ADD COLUMN scope TEXT NOT NULL DEFAULT 'shared'"
+            )
+        self._conn.commit()
 
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         with self._lock:
