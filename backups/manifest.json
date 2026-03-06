@@ -1,0 +1,21 @@
+{
+  "timestamp": "2026-03-06T17:11:14.513372",
+  "sources": {
+    "elias-db": {
+      "hash": "6de3a938a3094d1a",
+      "size": 589824
+    },
+    "knowledge-graph": {
+      "hash": "982b16367eb72cbf",
+      "size": 11572
+    },
+    "memory-md": {
+      "hash": "c1896283a0fbe2c5",
+      "size": 9404
+    },
+    "hooks": {
+      "hash": "a560c189c01130f0",
+      "size": 385
+    }
+  }
+}
